@@ -1,0 +1,2756 @@
+{
+  "name": "Sessions Nodes Import",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "facebook123",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "222e94ad-5f26-4f39-b3f9-529c55b99dd8",
+      "name": "Webhook WhatsApp",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "afe272de-e1ed-432b-a04a-ea4508030105"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "7b809bf0-43f6-405e-bc88-d0126ba1f18e",
+      "name": "Respond 200 to Meta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        280,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body || $json;\nconst entry = body.entry;\nif (!entry || !entry[0] || !entry[0].changes || !entry[0].changes[0]) return [];\nconst value = entry[0].changes[0].value;\nif (value.statuses && !value.messages) return [];\nif (!value.messages || !value.messages[0]) return [];\nconst message = value.messages[0];\nconst messageId = message.id;\nconst from = message.from;\nconst type = message.type;\nlet text = '';\nif (type === 'text' && message.text) {\n  text = message.text.body || '';\n} else if (type === 'audio') {\n  text = '[AUDIO]';\n} else if (type === 'image') {\n  text = '[IMAGE]';\n} else {\n  text = '[OTHER]';\n}\nreturn [{ json: { messageId, from, type, text } }];"
+      },
+      "id": "52017ed7-c343-422a-8f1c-8d3b48f6ee0c",
+      "name": "Extract Message",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/processed_messages",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"message_id\": \"{{$json.messageId}}\"}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=ignore-duplicates,return=representation\"}"
+      },
+      "id": "5748a2a9-b57c-4b7b-beb3-d909fccbd491",
+      "name": "Dedup HTTP Insert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        560,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 2: Insere messageId na tabela processed_messages com ignore-duplicates. Se retornar array vazio → messageId já existia (duplicata). Se retornar item → novo."
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalFrom = $('Extract Message').first().json.from;\nconst originalText = $('Extract Message').first().json.text;\nconst originalType = $('Extract Message').first().json.type;\nconst originalMessageId = $('Extract Message').first().json.messageId;\n\nlet isDuplicate = false;\n\nif ($json.error || ($json.statusCode && $json.statusCode >= 400)) {\n  isDuplicate = false;\n} else {\n  const result = Array.isArray($json) ? $json : [];\n  isDuplicate = result.length === 0;\n}\n\nreturn [{ json: { messageId: originalMessageId, from: originalFrom, type: originalType, text: originalText, isDuplicate } }];"
+      },
+      "id": "1e645fd4-2870-44d6-903c-854313149e5e",
+      "name": "Dedup Evaluate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        840,
+        0
+      ],
+      "notes": "MELHORIA 2: Avalia resultado do INSERT. Array vazio = messageId já existia (duplicata). Tem dados = nova mensagem."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.isDuplicate}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "79383223-33d6-4878-9b74-0c1708642fb8",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        0
+      ],
+      "notes": "true = duplicata (descarta silenciosamente). false = nova mensagem (processa)."
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/sessions?phone=eq.{{$(\"Extract Message\").item.json.from}}&limit=1",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"return=representation\"}"
+      },
+      "id": "d1d5a77c-12cd-414e-8df0-0288e6a6858f",
+      "name": "Sessions Read",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 2: Lê sessão do paciente no Supabase. Contém human_takeover e pending_appointment para persistência entre chamadas."
+    },
+    {
+      "parameters": {
+        "functionCode": "const from = $('Extract Message').first().json.from;\nconst text = ($('Extract Message').first().json.text || '').trim();\nconst type = $('Extract Message').first().json.type;\nconst messageId = $('Extract Message').first().json.messageId;\n\nlet session = {};\nconst sessionResult = Array.isArray($json) ? $json : [];\nif (sessionResult.length > 0) {\n  session = sessionResult[0];\n}\n\nlet humanTakeover = session.human_takeover || false;\nconst pendingAppointment = session.pending_appointment || null;\n\nconst textLower = text.toLowerCase();\nif (textLower === '#bot') {\n  humanTakeover = false;\n} else if (textLower === '#humano') {\n  humanTakeover = true;\n}\n\nconst hasPendingAppointment = pendingAppointment !== null && typeof pendingAppointment === 'object';\n\nreturn [{ json: {\n  from,\n  text,\n  type,\n  messageId,\n  isHumanHandling: humanTakeover,\n  hasPendingAppointment,\n  pendingAppointment: pendingAppointment,\n  sessionHumanTakeover: humanTakeover\n}}];"
+      },
+      "id": "94e788da-18dd-426c-baf3-9051abbc8137",
+      "name": "Sessions Evaluate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        0
+      ],
+      "notes": "MELHORIA 2: Substitui Human Takeover Check. Lê sessão do Supabase, processa #humano/#bot, verifica pending_appointment."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "=={{$json.isHumanHandling}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "515e0f70-068f-42bb-a297-ddbf9c492446",
+      "name": "Is Human Handling?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2520,
+        0
+      ],
+      "notes": "true = atendente humano (bot silencioso). false = bot processa mensagem."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.hasPendingAppointment}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "75239fe7-ef6e-450c-becf-7a40310889cc",
+      "name": "Has Pending Appointment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2800,
+        0
+      ],
+      "notes": "MELHORIA 9: Verifica se existe agendamento pendente de confirmação para este paciente."
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = ($json.text || '').toLowerCase().trim();\nconst from = $json.from;\nconst pending = $json.pendingAppointment;\n\nconst confirmWords = ['sim', 's', 'yes', 'confirmar', 'confirmo', 'ok', 'pode', '1', 'claro', 'certo'];\nconst rejectWords = ['não', 'nao', 'no', 'cancelar', 'cancelo', 'cancela', 'desistir', '2', 'nope'];\n\nconst isConfirmed = confirmWords.some(w => text === w || text.startsWith(w + ' ') || text.includes(w));\nconst isRejected = rejectWords.some(w => text === w || text.startsWith(w + ' ') || text.includes(w));\n\nif (isConfirmed) {\n  return [{ json: {\n    pendingAction: 'confirmed',\n    from,\n    nome: pending.nome,\n    especialidade: pending.especialidade,\n    data: pending.data,\n    hora: pending.hora,\n    text: $json.text\n  }}];\n}\n\nif (isRejected) {\n  return [{ json: {\n    pendingAction: 'rejected',\n    from,\n    nome: pending.nome,\n    text: $json.text\n  }}];\n}\n\nreturn [{ json: {\n  pendingAction: 'unclear',\n  from,\n  nome: pending.nome,\n  especialidade: pending.especialidade,\n  data: pending.data,\n  hora: pending.hora,\n  text: $json.text,\n  mensagem: `Por favor, responda *SIM* para confirmar ou *NÃO* para cancelar o agendamento:\\n\\n👤 ${pending.nome}\\n🏥 ${pending.especialidade}\\n📅 ${pending.data}\\n⏰ ${pending.hora}`\n}}];"
+      },
+      "id": "48e78bbf-0295-43ee-9d26-b494927caeae",
+      "name": "Process Pending Confirmation",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        0
+      ],
+      "notes": "MELHORIA 9: Analisa a resposta do paciente (sim/não) sobre o agendamento pendente. Classifica em confirmed/rejected/unclear."
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.pendingAction}}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "confirmed"
+            },
+            {
+              "value2": "rejected",
+              "output": 1
+            },
+            {
+              "value2": "unclear",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 2
+      },
+      "id": "6604dc60-4ec1-4f25-90e2-5b2400ab80dd",
+      "name": "Pending Action Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        0
+      ],
+      "notes": "MELHORIA 9: Roteia com base na resposta do paciente: confirmed→cria consulta, rejected→cancela pendente, unclear→re-pergunta."
+    },
+    {
+      "parameters": {
+        "requestMethod": "=POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$json.from}}\",\"pending_appointment\":null}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "6b17eaa6-c16a-4fa0-a197-b72758dbf0d5",
+      "name": "Clear Pending Before Create",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        3640,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Limpa pending_appointment da sessão antes de criar o agendamento (paciente confirmou)."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$json.from}}\",\"pending_appointment\":null}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "cd597eb5-5f73-4b36-a91a-102a6b45d573",
+      "name": "Clear Pending Rejected",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        3640,
+        120
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Limpa pending_appointment quando paciente rejeita o agendamento."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"Ok {{$json.nome}}, o agendamento pendente foi cancelado. Se precisar agendar novamente, é só me dizer! 😊\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "7990c836-6a8a-4f4f-a307-cf2430f09894",
+      "name": "Cancel Pending Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3920,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Enviado quando o paciente rejeita o agendamento pendente."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "b9acfc0d-5f72-418c-9c36-8a5c0fcccaec",
+      "name": "Pending Unclear Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3640,
+        240
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Re-pergunta quando o paciente responde algo ambíguo sobre o agendamento pendente."
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$('Sessions Evaluate').item.json.type}}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "=equal",
+              "value2": "=audio"
+            },
+            {
+              "value2": "image",
+              "output": 1
+            },
+            {
+              "value2": "text",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 2
+      },
+      "id": "a0f139cc-d4a3-4d06-9e7a-914853b0ff1b",
+      "name": "Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{$('Extract Message').item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"Olá! No momento não consigo processar áudios. Por favor, envie sua mensagem em texto. 😊\"}}",
+        "headerParametersJson": "={\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer {{$vars.META_TOKEN}}\"}"
+      },
+      "id": "c82817de-72fd-4c0c-be5b-eadc0857ded7",
+      "name": "Audio Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3360,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{$('Extract Message').item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"Olá! No momento não consigo processar imagens. Por favor, descreva sua solicitação em texto. 😊\"}}",
+        "headerParametersJson": "={\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer {{$vars.META_TOKEN}}\"}"
+      },
+      "id": "29d5038b-9a68-4af3-a75b-47408ecb5ffb",
+      "name": "Image Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3360,
+        240
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 30000
+        },
+        "bodyParametersJson": "={{\nJSON.stringify({\n  model: \"llama-3.3-70b-versatile\",\n  messages: [\n    {\n      role: \"system\",\n      content: `Você é a Esperança, assistente virtual da Clínica Saúde Viva, localizada em Luanda, Angola.\n\nINFORMAÇÕES DA CLÍNICA:\n- Nome: Clínica Saúde Viva\n- Endereço: Rua Marien Ngouabi, nº 47, Maianga, Luanda\n- Telefone: +244 931 087 088\n- Horário de atendimento: Segunda a Sexta, das 08:00 às 18:00\n- Especialidades disponíveis: Clínico Geral, Cardiologia, Pediatria, Ginecologia, Ortopedia, Dermatologia, Oftalmologia\n- Planos aceites: ENSA, AAA Saúde, Médis Angola, particular\n- Consultas duram em média 30 minutos\n- Agendamentos podem ser feitos com até 30 dias de antecedência\n\nA tua personalidade:\n- Chamas-te Esperança\n- És muito gentil, calorosa e humana\n- Falas português de Angola, de forma natural e acolhedora\n- Podes dar explicações, esclarecer dúvidas e conversar naturalmente\n- Quando não souberes responder algo, dizes com simpatia que vais verificar\n\nREGRAS DO JSON — NUNCA QUEBRE ESTAS REGRAS:\n1. Responde SEMPRE com um JSON válido no final da tua resposta\n2. A data DEVE estar SEMPRE no formato DD/MM/AAAA. NUNCA use outro formato\n3. A hora DEVE estar SEMPRE no formato HH:MM com zeros à esquerda. Ex: 09:30, 14:00\n4. A data actual em Luanda é: ${$now.setZone('Africa/Luanda').toFormat('dd/MM/yyyy')}\n5. Se a hora for ambígua (ex: 'de manhã', 'à tarde'), coloca null e pede esclarecimento\n6. Se a data for ambígua, coloca null e pede esclarecimento\n7. As intenções possíveis são APENAS: agendar, cancelar, info, humano, outro\n8. Para dúvidas gerais sobre a clínica, usa a intenção 'outro'\n\nIMPORTANTE:\n- O utilizador pode escrever datas de QUALQUER forma (ex: amanhã, next friday, 2 de abril, 02-04, daqui a 3 dias, etc)\n- Interpreta corretamente e converte SEMPRE para DD/MM/AAAA\n- Faz o mesmo para horas (ex: 7h → 07:00)\n\nFORMATO JSON OBRIGATÓRIO (sempre no final):\n{\"intencao\": \"agendar|cancelar|info|humano|outro\", \"nome\": \"nome completo ou null\", \"especialidade\": \"especialidade ou null\", \"data\": \"DD/MM/AAAA ou null\", \"hora\": \"HH:MM ou null\", \"mensagem\": \"resposta amigável em português\"}`\n    },\n\n    ...$('Build History Context').item.json.historyMessages,\n\n    {\n      role: \"user\",\n      content: $('Build History Context').item.json.text\n    }\n  ]\n})\n}}",
+        "headerParametersJson": "={\n  \"Authorization\": \"Bearer {{$vars.GROQ_KEY}}\",\n  \"Content-Type\": \"application/json\"\n}",
+        "queryParametersJson": "="
+      },
+      "id": "17695bd4-3e38-4652-9031-d06ad6ad6928",
+      "name": "AI Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        240
+      ],
+      "continueOnFail": true,
+      "notes": "GEMINI 1.5 Flash. GEMINI_API_KEY deve ser configurado como variável de ambiente no n8n."
+    },
+    {
+      "parameters": {
+        "functionCode": "const from = $input.first().json.from;\n\nif ($json.error) {\n  return [{ json: { intencao: 'erro_ia', mensagem: 'Desculpe, estamos com dificuldades técnicas. Por favor, tente novamente em instantes. 🙏', from } }];\n}\n\nlet raw = '';\ntry {\n  raw = $json.choices[0].message.content || '';\n} catch(e) {\n  return [{ json: { intencao: 'erro_ia', mensagem: 'Não consegui processar sua mensagem. Tente novamente.', from } }];\n}\n\n// Limpar markdown\nraw = raw.replace(/```json\\n?/gi, '').replace(/```\\n?/g, '').trim();\n\n// Extrair JSON do texto (a IA pode responder com texto + JSON)\nconst jsonMatch = raw.match(/\\{[\\s\\S]*\\}/);\nif (jsonMatch) {\n  raw = jsonMatch[0];\n}\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch(e) {\n  const intencaoMatch = raw.match(/\"intencao\"\\s*:\\s*\"([^\"]+)\"/);\n  const mensagemMatch = raw.match(/\"mensagem\"\\s*:\\s*\"([^\"]+)\"/);\n  return [{ json: {\n    intencao: intencaoMatch ? intencaoMatch[1] : 'outro',\n    mensagem: mensagemMatch ? mensagemMatch[1] : 'Como posso ajudá-lo?',\n    from\n  }}];\n}\n\nparsed.from = parsed.from || from;\nparsed.intencao = (parsed.intencao || 'outro').toLowerCase().trim();\nparsed.nome = parsed.nome || null;\nparsed.especialidade = parsed.especialidade || null;\nparsed.mensagem = parsed.mensagem || 'Como posso ajudá-lo?';\n\n// ✅ Validar e normalizar data — aceita DD/MM/AAAA\nif (parsed.data) {\n  if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(parsed.data)) {\n    // Formato correcto — mantém como está\n    parsed.data = parsed.data;\n  } else if (/^\\d{4}-\\d{2}-\\d{2}$/.test(parsed.data)) {\n    // Converter YYYY-MM-DD → DD/MM/AAAA (segurança caso a IA falhe)\n    const [ano, mes, dia] = parsed.data.split('-');\n    parsed.data = `${dia}/${mes}/${ano}`;\n  } else {\n    // Formato inválido — anula e deixa o Validate tratar\n    parsed.data = null;\n  }\n}\n\n// ✅ Validar hora — forçar HH:MM\nif (parsed.hora) {\n  const horaMatch = parsed.hora.match(/^(\\d{1,2}):(\\d{2})$/);\n  if (horaMatch) {\n    const hh = String(horaMatch[1]).padStart(2, '0');\n    const mm = horaMatch[2];\n    parsed.hora = `${hh}:${mm}`;\n  } else {\n    parsed.hora = null;\n  }\n}\n\nreturn [{ json: parsed }];"
+      },
+      "id": "52b7c90f-cedf-4cec-9643-e1ae8f9a354c",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        4200,
+        120
+      ],
+      "notes": "MELHORIA 5: Extração de JSON via regex, fallback manual, normalização de campos. Nunca deixa o fluxo quebrar."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.intencao}}",
+                    "rightValue": "agendar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "607e30ab-fb85-4a38-9e7e-7976664c2334"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.intencao}}",
+                    "rightValue": "cancelar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d0e66b48-01bc-4398-bc6a-afe96e15c233"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.intencao}}",
+                    "rightValue": "info",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "5ade360c-da45-4b3a-8f86-076defb4fd83"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.intencao}}",
+                    "rightValue": "humano",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "776c5d01-9b5e-411b-92f6-4a854896bce1"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.intencao}}",
+                    "rightValue": "erro_ia",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "4553bed0-c99f-4a62-b17a-873b7aa2d9f2"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "2960e3c8-f202-43d7-bf3d-51945f4b8498",
+                    "leftValue": "={{ $json.intencao}}",
+                    "rightValue": "outro",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6fb6990b-8d68-4deb-b346-47ff93dc9ece",
+      "name": "Intent Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        5040,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $json.data;\nconst hora = $json.hora;\nconst nome = $json.nome;\nconst especialidade = $json.especialidade;\nconst from = $json.from;\n\nconst missing = [];\nif (!nome) missing.push('seu nome completo');\nif (!especialidade) missing.push('a especialidade desejada (ex: Clínico Geral, Cardiologista)');\nif (!data) missing.push('a data desejada (ex: 25/03/2025)');\nif (!hora) missing.push('o horário desejado (ex: 14:30)');\n\nif (missing.length > 0) {\n  return [{ json: { \n    valid: false, from, nome, \n    mensagem: `Para agendar sua consulta, ainda preciso de: ${missing.join(', ')}. Por favor, informe esses dados. 😊` \n  }}];\n}\n\n// 🕐 Validar horário\nconst [hh, mm] = hora.split(':').map(Number);\nconst totalMinutes = hh * 60 + (mm || 0);\n\nif (isNaN(hh) || isNaN(mm) || totalMinutes < 8 * 60 || totalMinutes > 18 * 60) {\n  return [{ json: {\n    valid: false, from, nome,\n    mensagem: '🕐 Nosso horário de atendimento é das *08:00 às 18:00* (hora de Luanda).\\n\\nPor favor, escolha um horário dentro desse intervalo.'\n  }}];\n}\n\n// 📅 Validar formato correto (DD/MM/AAAA)\nif (!/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(data)) {\n  return [{ json: {\n    valid: false, from, nome,\n    mensagem: '📅 Formato de data inválido. Use DD/MM/AAAA (ex: 25/03/2025).'\n  }}];\n}\n\n// 🔄 Converter para YYYY-MM-DD\nconst [dia, mes, ano] = data.split('/');\nconst dataFormatada = `${ano}-${mes}-${dia}`;\n\n// 🕒 Data atual em Luanda\nconst LUANDA_OFFSET_MS = 60 * 60 * 1000;\nconst nowUTC = Date.now();\nconst nowLuanda = new Date(nowUTC + LUANDA_OFFSET_MS);\nconst todayLuanda = nowLuanda.toISOString().split('T')[0];\n\n// 🚫 Comparar corretamente\nif (dataFormatada < todayLuanda) {\n  return [{ json: {\n    valid: false, from, nome,\n    mensagem: '📅 A data informada já passou. Por favor, escolha uma data futura.'\n  }}];\n}\n\n// ✅ Tudo certo\nreturn [{ json: { \n  valid: true, \n  from, \n  nome, \n  especialidade, \n  data: dataFormatada, // padronizado\n  hora, \n  mensagem: $json.mensagem, \n  intencao: $json.intencao \n}}];"
+      },
+      "id": "c307a772-f64d-4a52-9729-952987bfa37b",
+      "name": "Validate Date & Time",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        5320,
+        120
+      ],
+      "notes": "MELHORIA 3 & 4: Valida campos obrigatórios, horário de funcionamento (08h-18h Luanda UTC+1) e data no futuro."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.valid}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "90edcea1-6e6c-4cb0-b7db-6402fee1fe8b",
+      "name": "Data Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        5600,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$json.from}}\",\"pending_appointment\":{\"nome\":\"{{$json.nome}}\",\"especialidade\":\"{{$json.especialidade}}\",\"data\":\"{{$json.data}}\",\"hora\":\"{{$json.hora}}\"}}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "b10bce7c-4b0e-49aa-baf7-860e504611e6",
+      "name": "Save Pending Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        5880,
+        240
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Salva os dados do agendamento na sessão (pending_appointment) aguardando confirmação do paciente."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"Por favor confirme os detalhes da sua consulta:\\n\\n👤 {{$json.nome}}\\n🏥 {{$json.especialidade}}\\n📅 {{$json.data}}\\n⏰ {{$json.hora}}\\n\\nResponda *SIM* para confirmar ou *NÃO* para cancelar. 😊\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "13d3ae58-02f7-4265-b864-5ccd6a4c10d9",
+      "name": "Send Confirmation Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        6160,
+        480
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Envia mensagem de confirmação ao paciente antes de criar o agendamento. O fluxo para aqui e retoma quando o paciente responder."
+    },
+    {
+      "parameters": {
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments?data=eq.{{$json.data}}&hora=eq.{{$json.hora}}&status=eq.agendado",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\"}"
+      },
+      "id": "9a1e4a90-8577-4eff-a734-442c13760d35",
+      "name": "Check Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "SUPABASE: Verifica disponibilidade do slot na tabela consultas."
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalData = $input.first().json;\nconst hasError = $json.error || ($json.statusCode && $json.statusCode >= 400);\n\nif (hasError) {\n  return [{ json: {\n    calendarError: true,\n    from: originalData.from,\n    nome: originalData.nome,\n    data: originalData.data,\n    hora: originalData.hora,\n    mensagem: 'Tive uma dificuldade ao verificar a disponibilidade. Por favor, tente novamente em instantes ou ligue para a clínica. 🙏'\n  }}];\n}\n\nconst rows = Array.isArray($json) ? $json : [];\nconst slotBusy = rows.length > 0;\n\nreturn [{ json: { ...originalData, calendarError: false, slotBusy } }];"
+      },
+      "id": "725db1c1-f357-4bd9-a718-35b210559cd7",
+      "name": "Calendar Error Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        4200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.calendarError}}"
+            }
+          ]
+        }
+      },
+      "id": "a62f41a2-911a-4e6e-abc3-ed832d8e3a36",
+      "name": "Calendar OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.slotBusy}}"
+            }
+          ]
+        }
+      },
+      "id": "2c1ce02f-159c-4b65-ad67-64c692dc4b9e",
+      "name": "Slot Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments?data=eq.{{$json.data}}&status=eq.agendado&select=hora",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\"}"
+      },
+      "id": "6b85ce9d-5850-4fb1-b1bc-88b10d05e186",
+      "name": "Get Available Slots",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        6160,
+        240
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 6: Busca todos os slots ocupados no mesmo dia para calcular os próximos horários disponíveis."
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalData = $input.first().json;\nconst from = originalData.from;\nconst nome = originalData.nome;\nconst requestedData = originalData.data;\nconst requestedHora = originalData.hora;\n\nconst rows = Array.isArray($json) ? $json : [];\nconst occupiedSlots = new Set(rows.map(r => r.hora ? r.hora.substring(0, 5) : ''));\n\nconst allSlots = [];\nfor (let h = 8; h <= 17; h++) {\n  for (let m of [0, 30]) {\n    const slot = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;\n    allSlots.push(slot);\n  }\n}\nallSlots.push('18:00');\n\nconst available = allSlots.filter(s => !occupiedSlots.has(s) && s > (requestedHora || '00:00'));\n\nlet mensagem;\nif (available.length === 0) {\n  const nextDate = new Date(requestedData + 'T12:00:00+01:00');\n  nextDate.setDate(nextDate.getDate() + 1);\n  while (nextDate.getDay() === 0) nextDate.setDate(nextDate.getDate() + 1);\n  const nextDateStr = nextDate.toISOString().split('T')[0];\n  mensagem = `⚠️ Não há horários disponíveis em ${requestedData} após ${requestedHora}.\\n\\nPosso verificar para o dia *${nextDateStr}*. Qual horário prefere? (das 08:00 às 18:00) 📅`;\n} else {\n  const suggestions = available.slice(0, 3);\n  mensagem = `⏰ O horário *${requestedHora}* de *${requestedData}* está ocupado.\\n\\nTenho disponível neste dia:\\n${suggestions.map((s, i) => `${i+1}. ${s}`).join('\\n')}\\n\\nQual prefere? (Ou informe outro horário entre 08:00 e 18:00) 😊`;\n}\n\nreturn [{ json: { from, nome, data: requestedData, hora: requestedHora, mensagem } }];"
+      },
+      "id": "44261158-ea9c-448b-8667-7c12b4d5eb1c",
+      "name": "Build Slot Suggestion",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        6440,
+        120
+      ],
+      "notes": "MELHORIA 6: Calcula próximos 3 slots disponíveis no dia (intervalos de 30min, 08h-18h). Se não houver, sugere próximo dia."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "534921cf-0a05-468a-b69e-762a7fab2b83",
+      "name": "Slot Unavailable Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        6720,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true,
+      "notes": "MELHORIA 6: Envia sugestão de horários alternativos (construída pelo Build Slot Suggestion)."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\"nome\":\"{{$json.nome}}\",\"telefone\":\"{{$json.from}}\",\"especialidade\":\"{{$json.especialidade}}\",\"data\":\"{{$json.data}}\",\"hora\":\"{{$json.hora}}\",\"status\":\"agendado\"}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"return=representation\"}"
+      },
+      "id": "108a4d14-2c5c-4065-94bd-11db3b7685a5",
+      "name": "Create Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        5040,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "SUPABASE: INSERT na tabela consultas. A constraint unique_slot (data, hora WHERE status='Agendado') previne double booking."
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalData = $input.first().json;\n\nconst statusCode = $json.statusCode || $json.code || 0;\nconst errorMsg = ($json.message || $json.details || $json.error || '').toString().toLowerCase();\n\nconst isConflict = statusCode === 409 ||\n  errorMsg.includes('duplicate') ||\n  errorMsg.includes('23505') ||\n  errorMsg.includes('unique_slot') ||\n  errorMsg.includes('unique constraint') ||\n  errorMsg.includes('already exists');\n\nconst hasError = $json.error || (statusCode >= 400);\n\nif (hasError && isConflict) {\n  return [{ json: {\n    appointmentError: true,\n    isConflict: true,\n    slotBusy: true,\n    from: originalData.from,\n    nome: originalData.nome,\n    data: originalData.data,\n    hora: originalData.hora,\n    especialidade: originalData.especialidade\n  }}];\n}\n\nif (hasError) {\n  return [{ json: {\n    appointmentError: true,\n    isConflict: false,\n    from: originalData.from,\n    nome: originalData.nome,\n    mensagem: 'Tive um problema ao criar sua consulta. Por favor, tente novamente ou ligue para a clínica. 🙏'\n  }}];\n}\n\nconst rows = Array.isArray($json) ? $json : [$json];\nconst record = rows[0] || {};\n\nreturn [{ json: { ...originalData, appointmentError: false, isConflict: false, consultaId: record.id || null } }];"
+      },
+      "id": "f95a4810-2c55-4f44-836f-2df2e1aff19b",
+      "name": "Appointment Error Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        5320,
+        0
+      ],
+      "notes": "MELHORIA 1: Detecta conflito de constraint (unique_slot) e redireciona para sugestão. Distingue conflito de outros erros."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.appointmentError}}"
+            }
+          ]
+        }
+      },
+      "id": "8aab8027-70bc-4996-9c0c-753c842033a2",
+      "name": "Appointment OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        5600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.isConflict}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "5f4a59e0-858e-4d12-90b7-39a97bdddcb0",
+      "name": "Is Conflict?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        5880,
+        120
+      ],
+      "notes": "MELHORIA 1: true = conflito de slot → redireciona para Get Available Slots. false = outro erro → mensagem de erro."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "7266f9d6-90ba-4cf5-adcc-c667a1daa2c1",
+      "name": "Appointment Error Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        6160,
+        360
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = {\n  Timestamp: new Date().toISOString(),\n  Nome: $json.nome || 'N/A',\n  Telefone: $json.from || 'N/A',\n  Especialidade: $json.especialidade || 'N/A',\n  Data: $json.data || 'N/A',\n  Hora: $json.hora || 'N/A',\n  ConsultaId: $json.consultaId || 'N/A',\n  Status: 'Agendado'\n};\nreturn [{ json: { ...$json, supabaseData: data } }];"
+      },
+      "id": "4bbd9c2b-df32-4147-8dc6-fdc35b905667",
+      "name": "Prepare Supabase Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        5880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/pacientes",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"nome\":\"{{$json.nome}}\",\"telefone\":\"{{$json.from}}\"}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "b2c05653-b916-4922-83be-ce0d8b6b0509",
+      "name": "Upsert Paciente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        6160,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "SUPABASE: Insere paciente via RPC upsert_paciente. Ver SQL nos setup_notes."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/consultas",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"nome\":\"{{$json.supabaseData.Nome}}\",\"telefone\":\"{{$json.supabaseData.Telefone}}\",\"especialidade\":\"{{$json.supabaseData.Especialidade}}\",\"data\":\"{{$json.supabaseData.Data}}\",\"hora\":\"{{$json.supabaseData.Hora}}\",\"status\":\"{{$json.supabaseData.Status}}\"}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"return=representation\"}"
+      },
+      "id": "fde5b449-3b0f-4769-90f1-309276962a43",
+      "name": "Save Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        6160,
+        120
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 7: Log completo com campos intencao, status_log e created_at. Ver SQL nos setup_notes para adicionar colunas."
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.first().json;\nif (data.error) console.log('[WARN] Upsert/Log failed (non-critical):', JSON.stringify(data.error));\nreturn [{ json: $input.first().json }];"
+      },
+      "id": "366400cb-b1ae-4229-9903-084bd616e467",
+      "name": "Supabase Save Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        6440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$json.from}}\",\"pending_appointment\":null}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "054cae59-b1e7-4244-9ee7-b0691bde6fd1",
+      "name": "Clear Pending After Booking",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        6720,
+        0
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 9: Garante que pending_appointment é limpo da sessão após o agendamento ser confirmado e criado com sucesso."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"✅ Consulta confirmada!\\n\\n👤 {{$json.nome}}\\n🏥 {{$json.especialidade}}\\n📅 {{$json.data}}\\n⏰ {{$json.hora}}\\n\\nAté breve! 😊\"}}"
+            },
+            {}
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "fc6e2cc3-82f4-4194-b741-d3c3a0652690",
+      "name": "Confirm Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7000,
+        0
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "=={{DateTime.fromISO($json.data + 'T' + $json.hora).minus({hours: 24}).toISO()}}"
+      },
+      "id": "f4d383a5-cbba-4547-8a84-f2f95ee1c84c",
+      "name": "Wait Reminder 24h",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        7280,
+        0
+      ],
+      "webhookId": "18b77bad-4623-4a65-8a2b-5dce4ac74206",
+      "notes": "MELHORIA 4: Usa timezone correto Africa/Luanda (UTC+1) via sufixo +01:00 no ISO. Aguarda exatamente 24h antes da consulta."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"⏰ Lembrete: você tem uma consulta amanhã!\\n\\n👤 {{$json.nome}}\\n🏥 {{$json.especialidade}}\\n📅 {{$json.data}}\\n⏰ {{$json.hora}}\\n\\nAté amanhã! 😊\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "2e447e27-9fde-46a3-b497-ee8e0299cb44",
+      "name": "Send Reminder 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7560,
+        0
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "665c4ac9-ad83-4d04-9037-0fd35139eb84",
+      "name": "Calendar Error Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        4760,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"={{$('Extract Message').item.json.from}}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"body\": \"={{$json.mensagem}}\"\n  }\n}",
+        "headerParametersJson": "{\n  \"Content-Type\": \"application/json\"\n}"
+      },
+      "id": "c67ae070-e411-4092-b24a-06c91eaab8d3",
+      "name": "Fallback Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        5320,
+        360
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PFuvTVZdlgEtGNLb",
+          "name": "Header Auth account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const from = $json.from;\nconst nome = $json.nome || 'Paciente';\nconsole.log(`[INFO] Human takeover activated for ${from}`);\nreturn [{ json: {\n  from,\n  nome,\n  sessionHumanTakeover: true,\n  mensagem: `Entendido, ${nome}! Vou chamar um de nossos atendentes. Por favor, aguarde um momento. 👨‍⚕️`\n}}];"
+      },
+      "id": "2e113ace-a203-4443-88c5-c3957e09ad23",
+      "name": "Activate Human Takeover",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        5320,
+        480
+      ],
+      "notes": "MELHORIA 2: Não usa mais staticData. Prepara dados para Sessions Write Takeover escrever no Supabase."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$json.from}}\",\"human_takeover\":true,\"pending_appointment\":null}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"resolution=merge-duplicates,return=representation\"}"
+      },
+      "id": "f548d584-e63e-4e3f-81af-25b872ba96ad",
+      "name": "Sessions Write Takeover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        5600,
+        360
+      ],
+      "continueOnFail": true,
+      "notes": "MELHORIA 2: Persiste human_takeover=true no Supabase sessions."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "6912aa6f-c273-464d-aa63-4c5c7e319ff1",
+      "name": "Human Takeover Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        5600,
+        480
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+      },
+      "id": "54aef945-3ae3-483d-b87f-1863b8d629f8",
+      "name": "AI Error Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        5320,
+        600
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PFuvTVZdlgEtGNLb",
+          "name": "Header Auth account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments?telefone=eq.{{$json.from}}&status=eq.agendado&order=data.asc&limit=1",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\"}"
+      },
+      "id": "4511870c-1d78-44ca-98fb-778a2def4822",
+      "name": "Search Event by Phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        5320,
+        240
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalData = $input.first().json;\nconst from = originalData.from;\nconst nome = originalData.nome;\n\nconst hasError = $json.error || ($json.statusCode && $json.statusCode >= 400);\nif (hasError) {\n  return [{ json: { from, nome, foundEvent: false, searchError: true } }];\n}\n\nconst rows = Array.isArray($json) ? $json : [];\nif (rows.length > 0) {\n  const consulta = rows[0];\n  return [{ json: {\n    from, nome,\n    consultaId: consulta.id,\n    eventSummary: `${consulta.especialidade} - ${consulta.data} ${consulta.hora ? consulta.hora.substring(0,5) : ''}`,\n    eventStart: `${consulta.data}T${consulta.hora}`,\n    foundEvent: true,\n    searchMethod: 'phone'\n  }}];\n}\n\nreturn [{ json: { from, nome, foundEvent: false, searchMethod: 'phone_failed_try_name' } }];"
+      },
+      "id": "7498fd81-4316-4e39-8547-9323e5d9968d",
+      "name": "Check Phone Search Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        5600,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.foundEvent}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "f6bd7830-cc18-41c3-b586-f9d7c2d70785",
+      "name": "Found by Phone?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        5880,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments?nome=ilike.{{$json.nome}}%&status=eq.agendado&order=data.asc&limit=1",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\"}"
+      },
+      "id": "65dfe6d4-e0f0-4058-a856-95801792bbd7",
+      "name": "Search Event by Name",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        6160,
+        600
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const from = $input.first().json.from;\nconst nome = $input.first().json.nome;\n\nconst hasError = $json.error || ($json.statusCode && $json.statusCode >= 400);\nif (hasError) {\n  return [{ json: { from, nome, foundEvent: false, searchError: true } }];\n}\n\nconst rows = Array.isArray($json) ? $json : [];\nif (rows.length > 0) {\n  const consulta = rows[0];\n  return [{ json: {\n    from, nome,\n    consultaId: consulta.id,\n    eventSummary: `${consulta.especialidade} - ${consulta.data} ${consulta.hora ? consulta.hora.substring(0,5) : ''}`,\n    eventStart: `${consulta.data}T${consulta.hora}`,\n    foundEvent: true,\n    searchMethod: 'name'\n  }}];\n}\n\nreturn [{ json: { from, nome, foundEvent: false, searchMethod: 'both_failed' } }];"
+      },
+      "id": "4d5f76ae-6ad8-4c77-8206-0b59aa4d0244",
+      "name": "Check Name Search Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        6440,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.foundEvent}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "03b57b65-e23d-407d-ae96-dc5493da8383",
+      "name": "Event Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        6720,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=={{$vars.SUPABASE_URL}}/rest/v1/appointments?id=eq.{{$json.consultaId}}",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersJson": "={\"status\":\"cancelado\"}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"return=representation\"}"
+      },
+      "id": "29ce2d62-7667-4a9d-b28a-f2827e09be9a",
+      "name": "Delete Calendar Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        7000,
+        240
+      ],
+      "continueOnFail": true,
+      "notes": "SUPABASE: UPDATE status='Cancelado' (substitui Delete do Google Calendar)."
+    },
+    {
+      "parameters": {
+        "functionCode": "const originalData = $input.first().json;\nconst hasError = $json.error || ($json.statusCode && $json.statusCode >= 400);\n\nif (hasError) {\n  return [{ json: {\n    deleteError: true,\n    from: originalData.from,\n    nome: originalData.nome,\n    mensagem: 'Ocorreu um problema ao cancelar sua consulta. Por favor, entre em contato com a clínica diretamente. 🙏'\n  }}];\n}\n\nreturn [{ json: {\n  deleteError: false,\n  from: originalData.from,\n  nome: originalData.nome,\n  eventSummary: originalData.eventSummary || 'Consulta'\n}}];"
+      },
+      "id": "7d7b91e4-3431-4f16-8379-73234e4c26f6",
+      "name": "Delete Error Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        7280,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.deleteError}}"
+            }
+          ]
+        }
+      },
+      "id": "5713ba3e-3476-49b1-a5b5-81d7de71646d",
+      "name": "Delete OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        7560,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"✅ Consulta cancelada com sucesso, {{$json.nome}}!\\n\\nSe precisar reagendar, é só me dizer. 😊\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "6e81b1d0-244f-4bac-b8fe-01042eeef170",
+      "name": "Cancel Confirm Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7840,
+        0
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"{{$json.mensagem}}\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "32c113c8-fdf1-4729-8475-e33ae0207b1c",
+      "name": "Cancel Delete Error Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7840,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "==https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "options": {
+          "timeout": 10000
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "Body",
+              "value": "=={\"messaging_product\":\"whatsapp\",\"to\":\"{{$(\"Extract Message\").item.json.from}}\",\"type\":\"text\",\"text\":{\"body\":\"Não encontrei nenhuma consulta agendada para {{$json.nome}}. Se precisar agendar, é só me dizer! 😊\"}}"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "24d11796-90d1-480e-b357-f5de88f24d18",
+      "name": "No Appointment Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7000,
+        120
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VqWAIgJdmPHdqPfw",
+          "name": "Header Auth account 3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "path": "facebook123",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "145aa63f-ea03-4a9a-9a25-198265e4b8ee",
+      "name": "Webhook WhatsApp GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        120
+      ],
+      "webhookId": "afe272de-e1ed-432b-a04a-ea4508030105"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{$json.query['hub.challenge']}}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "9c81d680-7e87-458d-a9f5-0f37398ef7d2",
+      "name": "Respond GET Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        280,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/sessions",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 8000
+        },
+        "bodyParametersJson": "={\"phone\":\"{{$('Sessions Evaluate').item.json.from}}\",\"human_takeover\":false,\"pending_appointment\":null}",
+        "headerParametersJson": "={\"apikey\": \"{{$vars.SUPABASE_KEY}}\", \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\", \"Content-Type\": \"application/json\", \"Prefer\": \"return=representation\"}"
+      },
+      "id": "967e05e1-a8f1-4c8c-be8b-101e70986dea",
+      "name": "Sessions Insert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        120
+      ],
+      "continueOnFail": true,
+      "notes": "Cria nova sessão no Supabase para paciente novo."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2d10124b-8b89-460c-a679-95e5b1c6242b",
+              "leftValue": "={{$('Sessions Read').item.json.length}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1960,
+        0
+      ],
+      "id": "c0a4afd5-970f-4c8a-9638-bc9f3858ba6c",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/sessions?phone=eq.{{$('Sessions Evaluate').item.json.from}}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"apikey\": \"{{$vars.SUPABASE_KEY}}\",\n  \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\",\n  \"Content-Type\": \"application/json\",\n  \"Prefer\": \"return=representation\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"human_takeover\": \"{{$('Sessions Evaluate').item.json.sessionHumanTakeover}}\",\n  \"updated_at\": \"{{$now}}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2240,
+        0
+      ],
+      "id": "238ffce4-8a36-4280-b318-1de98c95c6d4",
+      "name": "Session Update"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer {{$vars.META_TOKEN}}\"}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{$('Sessions Evaluate').first().json.from}}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"body\": \"{{$json.mensagem}}\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5880,
+        360
+      ],
+      "id": "c3717fe8-08c9-46af-929e-ba801525c954",
+      "name": "Missing Data Response",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PFuvTVZdlgEtGNLb",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v22.0/{{$vars.META_PHONE_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{$('Extract Message').item.json.from}}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"body\": \"{{$json.mensagem}}\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5320,
+        720
+      ],
+      "id": "c5dce167-899a-460c-8220-1c4aa193e44c",
+      "name": "Respostas Gerais",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PFuvTVZdlgEtGNLb",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/conversation_history?phone=eq.{{$('Sessions Evaluate').item.json.from}}&order=created_at.desc&limit=20",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"apikey\": \"{{$vars.SUPABASE_KEY}}\",\n  \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\",\n  \"Content-Type\": \"application/json\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3360,
+        360
+      ],
+      "id": "fe4cbef1-0e1e-4370-97f1-9d9c1417c8b6",
+      "name": "History Read",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawHistory = Array.isArray($input.all()[0].json) ? $input.all()[0].json : [];\n\nconst chronological = rawHistory.slice().reverse();\n\nconst historyMessages = chronological.slice(-20).map(row => ({\n  role: row.role,\n  content: row.content\n}));\n\nconst from = $('Sessions Evaluate').item.json.from;\nconst text = $('Sessions Evaluate').item.json.text;\n\nreturn [{ json: { historyMessages, from, text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        360
+      ],
+      "id": "f6b2c8e2-f244-46e7-a032-ddb676263639",
+      "name": "Build History Context",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/conversation_history",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"apikey\": \"{{$vars.SUPABASE_KEY}}\",\n  \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\",\n  \"Content-Type\": \"application/json\",\n  \"Prefer\": \"return=minimal\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"={{$('Sessions Evaluate').item.json.from}}\",\n  \"role\": \"user\",\n  \"content\": \"={{$('Sessions Evaluate').item.json.text}}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3920,
+        360
+      ],
+      "id": "b5bd2b7e-b3f0-4655-939d-28a70f124cb5",
+      "name": "Save User Message",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/conversation_history",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"apikey\": \"{{$vars.SUPABASE_KEY}}\",\n  \"Authorization\": \"Bearer {{$vars.SUPABASE_KEY}}\",\n  \"Content-Type\": \"application/json\",\n  \"Prefer\": \"return=minimal\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"={{$('Sessions Evaluate').item.json.from}}\",\n  \"role\": \"assistant\",\n  \"content\": \"={{$('Parse AI Response').item.json.mensagem}}\",\n  \"intencao\": \"={{$('Parse AI Response').item.json.intencao}}\",\n  \"nome\": \"={{$('Parse AI Response').item.json.nome}}\",\n  \"especialidade\": \"={{$('Parse AI Response').item.json.especialidade}}\",\n  \"data\": \"={{$('Parse AI Response').item.json.data}}\",\n  \"hora\": \"={{$('Parse AI Response').item.json.hora}}\",\n  \"mensagem\": \"={{$('Parse AI Response').item.json.mensagem}}\",\n  \"from\": \"={{$('Sessions Evaluate').item.json.from}}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4480,
+        120
+      ],
+      "id": "b4c9972a-4de5-4bc2-8a48-961e1076302b",
+      "name": "Save Assistant Message",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const parsed = $('Parse AI Response').item.json;\nconst from = $('Sessions Evaluate').item.json.from;\n\nreturn [{ json: {\n  intencao: parsed.intencao || 'outro',\n  nome: parsed.nome || null,\n  especialidade: parsed.especialidade || null,\n  data: parsed.data || null,\n  hora: parsed.hora || null,\n  mensagem: parsed.mensagem || 'Olá! Sou a Esperança da Clínica Saúde Viva. Como posso ajudá-lo? 😊',\n  from: from\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4760,
+        240
+      ],
+      "id": "7ba87978-2fa3-44bc-ab36-94d7ab00857e",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {
+    "Webhook WhatsApp": [
+      {
+        "json": {
+          "headers": {
+            "host": "crispim123.app.n8n.cloud",
+            "user-agent": "facebookexternalua",
+            "content-length": "492",
+            "accept": "*/*",
+            "accept-encoding": "gzip, br",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "2a03:2880:22ff:3::",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "US",
+            "cf-ray": "9e25d1b16e633e80-IAD",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "x-forwarded-for": "2a03:2880:22ff:3::, 172.70.43.24",
+            "x-forwarded-host": "crispim123.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-18-868c78b8f-w75x8",
+            "x-hub-signature": "sha1=a24ee5a0d012b32daa217cdb117f403e8eaf6813",
+            "x-hub-signature-256": "sha256=b3a943c79352f60736e924f789b28fdcf6c6a629241d8cf3aa855bbce7590cbf",
+            "x-is-trusted": "yes",
+            "x-real-ip": "2a03:2880:22ff:3::"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "object": "whatsapp_business_account",
+            "entry": [
+              {
+                "id": "1345268944031168",
+                "changes": [
+                  {
+                    "value": {
+                      "messaging_product": "whatsapp",
+                      "metadata": {
+                        "display_phone_number": "15551770151",
+                        "phone_number_id": "1022167494320490"
+                      },
+                      "contacts": [
+                        {
+                          "profile": {
+                            "name": "Crispim"
+                          },
+                          "wa_id": "244931087088"
+                        }
+                      ],
+                      "messages": [
+                        {
+                          "from": "244931087088",
+                          "id": "wamid.HBgMMjQ0OTMxMDg3MDg4FQIAEhggQUNBQjc0MTJGRTkyMDVFNDBEOTZBQjM3NjczNjFFNTMA",
+                          "timestamp": "1774524580",
+                          "text": {
+                            "body": "Olá!"
+                          },
+                          "type": "text"
+                        }
+                      ]
+                    },
+                    "field": "messages"
+                  }
+                ]
+              }
+            ]
+          },
+          "webhookUrl": "https://crispim123.app.n8n.cloud/webhook/facebook123",
+          "executionMode": "production"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Extract Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond 200 to Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Message": {
+      "main": [
+        [
+          {
+            "node": "Dedup HTTP Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup HTTP Insert": {
+      "main": [
+        [
+          {
+            "node": "Dedup Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Evaluate": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Sessions Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sessions Read": {
+      "main": [
+        [
+          {
+            "node": "Sessions Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sessions Evaluate": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Human Handling?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Has Pending Appointment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pending Appointment?": {
+      "main": [
+        [
+          {
+            "node": "Process Pending Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Pending Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Pending Action Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pending Action Switch": {
+      "main": [
+        [
+          {
+            "node": "Clear Pending Before Create",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clear Pending Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pending Unclear Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pending Before Create": {
+      "main": [
+        [
+          {
+            "node": "Check Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pending Rejected": {
+      "main": [
+        [
+          {
+            "node": "Cancel Pending Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Type": {
+      "main": [
+        [
+          {
+            "node": "Audio Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Image Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "History Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Response": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Switch": {
+      "main": [
+        [
+          {
+            "node": "Validate Date & Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Event by Phone",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Activate Human Takeover",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respostas Gerais",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Date & Time": {
+      "main": [
+        [
+          {
+            "node": "Data Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save Pending Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Missing Data Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Pending Appointment": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Calendar": {
+      "main": [
+        [
+          {
+            "node": "Calendar Error Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar Error Check": {
+      "main": [
+        [
+          {
+            "node": "Calendar OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar OK?": {
+      "main": [
+        [
+          {
+            "node": "Slot Available?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calendar Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slot Available?": {
+      "main": [
+        [
+          {
+            "node": "Create Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Available Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Appointment": {
+      "main": [
+        [
+          {
+            "node": "Appointment Error Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appointment Error Check": {
+      "main": [
+        [
+          {
+            "node": "Appointment OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appointment OK?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Supabase Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Conflict?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Conflict?": {
+      "main": [
+        [
+          {
+            "node": "Get Available Slots",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Appointment Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Slots": {
+      "main": [
+        [
+          {
+            "node": "Build Slot Suggestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slot Suggestion": {
+      "main": [
+        [
+          {
+            "node": "Slot Unavailable Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Supabase Data": {
+      "main": [
+        [
+          {
+            "node": "Upsert Paciente",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Paciente": {
+      "main": [
+        [
+          {
+            "node": "Supabase Save Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Log": {
+      "main": [
+        [
+          {
+            "node": "Supabase Save Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Save Check": {
+      "main": [
+        [
+          {
+            "node": "Clear Pending After Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pending After Booking": {
+      "main": [
+        [
+          {
+            "node": "Confirm Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Appointment": {
+      "main": [
+        [
+          {
+            "node": "Wait Reminder 24h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Reminder 24h": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder 24h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activate Human Takeover": {
+      "main": [
+        [
+          {
+            "node": "Sessions Write Takeover",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Human Takeover Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Event by Phone": {
+      "main": [
+        [
+          {
+            "node": "Check Phone Search Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Phone Search Result": {
+      "main": [
+        [
+          {
+            "node": "Found by Phone?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Found by Phone?": {
+      "main": [
+        [
+          {
+            "node": "Delete Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Event by Name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Event by Name": {
+      "main": [
+        [
+          {
+            "node": "Check Name Search Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Name Search Result": {
+      "main": [
+        [
+          {
+            "node": "Event Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Exists?": {
+      "main": [
+        [
+          {
+            "node": "Delete Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Appointment Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Delete Error Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Error Check": {
+      "main": [
+        [
+          {
+            "node": "Delete OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete OK?": {
+      "main": [
+        [
+          {
+            "node": "Cancel Confirm Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cancel Delete Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook WhatsApp GET": {
+      "main": [
+        [
+          {
+            "node": "Respond GET Challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sessions Insert": {
+      "main": [
+        [
+          {
+            "node": "Is Human Handling?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Session Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sessions Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Session Update": {
+      "main": [
+        [
+          {
+            "node": "Is Human Handling?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "History Read": {
+      "main": [
+        [
+          {
+            "node": "Build History Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build History Context": {
+      "main": [
+        [
+          {
+            "node": "AI Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Assistant Message": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Intent Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "saveExecutionProgress": true
+  },
+  "versionId": "5a26aeb7-d6c4-4c3e-a42d-16ee21d16ec2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "73642fe231cd3e540b3cdfcad25afaf0da0230507c0ae54ed2a5242a835e4522"
+  },
+  "id": "DtbacuHc4IXbT8Tt",
+  "tags": []
+}
